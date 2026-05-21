@@ -53,13 +53,13 @@ TEMPLATE_PARAMETERS = [
     "IDO-Aktivität, TRP/KYN", "Pregnenolonsulfat (ng/ml)", "Östrogenmetabolite",
     "Somatomedin C / IGF-1 (ng/ml)", "Neurotransmitter Plus",
     "NT-Tryptophan-Metabolismus", "Neuronenspezifische Enolase (NSE)",
-    "HOMA-Index", "HbA1c", "AGEs", "GPT", "NT-proBNP", "LDH 4 und 5",
-    "LDL-Cholesterin", "Lipo(a)", "Zonulin", "I-FABP", "HPU (Pyrrole im Urin)",
-    "TPO-AK", "TAK", "Nitrotyrosin", "CRP", "oxLDL", "MDA-LDL", "LDL",
-    "Kreatinin", "Harnsäure", "Beta-Cross-Laps", "Trap 5b", "Lp-PLA2", "Apo-B",
-    "Cystatin C", "CK", "Hämoglobin", "BDNF", "Serotonin", "Cortisol", "Calcium",
-    "fT3", "PSA", "Homocystein", "MCV", "MCH", "Histamin", "PTH", "Calcitriol",
-    "Mikronährstoff", "Vitamin A", "Vitamin B1", "Vitamin B2", "Vitamin B3",
+    "HOMA-Index", "HbA1c (%)", "AGEs", "NT-proBNP",
+    "Lipo(a)", "Zonulin", "I-FABP", "HPU (Pyrrole im Urin)",
+    "TPO-AK", "TAK", "Nitrotyrosin", "CRP (mg/l)", "oxLDL", "MDA-LDL",
+    "Beta-Cross-Laps", "Trap 5b", "Lp-PLA2",
+    "BDNF", "Serotonin", "Cortisol (nmol/l)", "PTH (pg/ml)", "Calcitriol",
+    "PSA (ng/ml)", "Homocystein", "Histamin",
+    "Vitamin A", "Vitamin B1", "Vitamin B2", "Vitamin B3",
     "Vitamin B5", "Vitamin B6", "Vitamin B7", "Vitamin B9", "Vitamin B12",
     "Calcidiol", "Vitamin E", "Vitamin K2",
     "Chrom", "Jod", "Molybdän", "Selen", "Bor", "Kupfer", "Zink", "Mangan",
@@ -67,9 +67,8 @@ TEMPLATE_PARAMETERS = [
     "Testosteron (gesamt)", "Freier Androgenindex (FAI)", "DHEA-S",
     "Freies Testosteron", "Estradiol (E2)", "Progesteron",
     "LH (Luteinisierendes Hormon)", "FSH (Follikelstimulierendes Hormon)",
-    "SHBG", "Albumin",
     # Herz & Gefäße
-    "Glucose nüchtern (mg/dL)", "Insulin Nüchtern", "HbA1c (%)", "AGE (Advanced Glycation Endproduct)",
+    "Glucose nüchtern (mg/dL)", "Insulin Nüchtern",
     "Cholesterin (mg/dl)", "ApoB (mg/dL)", "Apo A1", "LDL-C (mg/dL)",
     "Non-HDL-Cholesterin (mg/dL)", "Triglyceride (mg/dL)", "HDL-C (mg/dL)",
     "Homocystein (μmol/L)", "Lipoprotein(a) / Lp(a) (nmol/l)",
@@ -268,14 +267,14 @@ def analyze_with_claude(file_content, file_type):
         "- LDL-Cholesterin -> LDL-C (mg/dL)\n"
         "- Apolipoprotein B, Apo-B -> ApoB (mg/dL)\n"
         "- Haemoglobin, Hb -> Haemoglobin / Hb (g/dl)\n"
-        "- eGFR, GFR -> GFR CKD-EPI (ml/min/1.73m2)\n"
-        "- Folsaeure -> Vitamin B9\n"
-        "- Thiamin, Thiamin-diphosphat -> Thiamin-diphosphat / Vitamin B1 (nmol/l)\n"
-        "- Pyridoxalphosphat -> Pyridoxalphosphat / Vitamin B6 (ug/l)\n"
-        "- Holotranscobalamin, aktives B12 -> Holotranscobalamin / aktives B12 (pmol/l)\n"
-        "- SHBG, Sexualhormon-bindendes Globulin -> SHBG\n"
-        "- TSH, TSH-basal -> TSH (mU/l)\n"
-        "- freies T4, fT4 -> Freies T4 (ng/dl)\n"
+        "- eGFR, GFR, glomerulaere Filtrationsrate, Kreatinin-Clearance -> GFR CKD-EPI (ml/min/1.73m\xb2)\n"
+        "- SHBG, Sexualhormon-bindendes Globulin, Sex Hormone Binding Globulin -> SHBG (nmol/l)\n"
+        "- Folsaeure, Folat, Folic Acid, Vitamin B9 -> Vitamin B9\n"
+        "- Thiamin, Thiamin-diphosphat, Thiamin-PP, Vitamin B1 -> Vitamin B1\n"
+        "- Pyridoxalphosphat, Pyridoxal-5-phosphat, Vitamin B6 -> Vitamin B6\n"
+        "- Holotranscobalamin, aktives B12, Holo-TC, Vitamin B12 -> Vitamin B12\n"
+        "- TSH, TSH-basal, TSH-Wert -> TSH (mU/l)\n"
+        "- freies T4, fT4 -> Freies T4 / fT4 (ng/dl)\n"
         "- Ferritin -> Ferritin (ng/ml)\n"
         "- Transferrin -> Transferrin (mg/dl)\n"
         "- Transferrinsaettigung -> Transferrinsaettigung (%)\n"
