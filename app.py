@@ -262,7 +262,6 @@ def index():
 
 @app.route("/health")
 def health():
-    """Debug-Endpunkt um Konfiguration zu prüfen."""
     checks = {}
     checks["anthropic_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
     checks["template_sheet_id"] = bool(os.environ.get("TEMPLATE_SHEET_ID"))
