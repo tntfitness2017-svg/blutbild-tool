@@ -2,8 +2,12 @@ import os
 import re
 import base64
 import json
+import io
 from datetime import datetime
 from json_repair import repair_json
+from docx import Document
+from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from flask import Flask, request, jsonify, render_template
 import anthropic
 import gspread
@@ -76,6 +80,10 @@ TEMPLATE_PARAMETERS = [
     # Hormone
     "Gesamt-Testosteron (ng/ml)", "Testosteron, frei (pg/ml)",
     "SHBG (nmol/l)", "Estradiol / E2 (pg/ml)",
+    # Leber
+    "GOT / AST (U/l)", "GPT / ALT (U/l)", "Gamma GT (U/l)",
+    "Alkalische Phosphatase / AP (U/l)", "Bilirubin gesamt (mg/dl)",
+    "Albumin (g/dl)", "Protein / Gesamtprotein (g/dl)",
     # Zusaetzliche haeufige Parameter
     "Ferritin (ng/ml)", "Transferrin (mg/dl)", "Transferrinsaettigung (%)",
     "Magnesium (mmol/l)", "TSH (mU/l)", "Freies T4 (ng/dl)",
@@ -258,6 +266,12 @@ def analyze_with_claude(file_content, file_type):
         "- Magnesium -> Magnesium (mmol/l)\n"
         "- Coenzym Q10 -> Coenzym Q10 (ug/ml)\n"
         "- Malondialdehyd, MDA -> Malondialdehyd (umol/l)\n"
+        "- GOT, AST, GOT/AST -> GOT / AST (U/l)\n"
+        "- GPT, ALT, GPT/ALT -> GPT / ALT (U/l)\n"
+        "- Gamma GT, GGT, Gamma-GT -> Gamma GT (U/l)\n"
+        "- AP, Alkalische Phosphatase -> Alkalische Phosphatase / AP (U/l)\n"
+        "- Bilirubin -> Bilirubin gesamt (mg/dl)\n"
+        "- Albumin -> Albumin (g/dl)\n"
         "- Eisen (Serum), Eisen -> Eisen\n"
         "- Ignore units and parentheses when matching\n"
         "- Only put in 'nicht_zugeordnet' if truly no match exists\n\n"
@@ -325,6 +339,45 @@ def analyze_with_claude(file_content, file_type):
 
     data["handlungsempfehlung"] = rec
     return data
+
+
+def create_word_doc(customer_name, recommendation, test_date):
+    doc = Document()
+
+    # Title
+    title = doc.add_heading(f"Handlungsempfehlung – {customer_name}", 0)
+    title.runs[0].font.color.rgb = RGBColor(0xE0, 0x4A, 0x00)
+
+    sub = doc.add_paragraph(f"Erstellt am {test_date} | TNT Fitness Coach-Tool")
+    sub.runs[0].font.size = Pt(10)
+    sub.runs[0].font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+    doc.add_paragraph()
+
+    sections = [
+        ("zusammenfassung", "Zusammenfassung", "1A237E"),
+        ("dringend",        "Dringend",         "B71C1C"),
+        ("zusammenhaenge",  "Zusammenhaenge",   "4A148C"),
+        ("ernaehrung",      "Ernaehrung",       "1B5E20"),
+        ("training",        "Training",         "0D47A1"),
+        ("supplements",     "Supplements",      "4E342E"),
+        ("followup",        "Follow-up",        "006064"),
+    ]
+
+    for key, label, color_hex in sections:
+        text = recommendation.get(key, "")
+        if not text:
+            continue
+        r, g, b = int(color_hex[0:2], 16), int(color_hex[2:4], 16), int(color_hex[4:6], 16)
+        h = doc.add_heading(label, level=1)
+        h.runs[0].font.color.rgb = RGBColor(r, g, b)
+        p = doc.add_paragraph(text)
+        p.runs[0].font.size = Pt(11)
+        doc.add_paragraph()
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
 
 
 @app.route("/")
@@ -422,6 +475,10 @@ def analyze():
 
         sheet_url = f"https://docs.google.com/spreadsheets/d/{TEMPLATE_SHEET_ID}/edit#gid={ws.id}"
 
+        # Word-Dokument generieren
+        word_buf = create_word_doc(customer_name, recommendation, test_date)
+        word_b64 = base64.b64encode(word_buf.read()).decode("utf-8")
+
         return jsonify({
             "success": True,
             "sheet_url": sheet_url,
@@ -432,6 +489,8 @@ def analyze():
             "not_matched_count": len(not_matched),
             "not_matched": not_matched,
             "recommendation": recommendation,
+            "word_doc_b64": word_b64,
+            "word_filename": f"Handlungsempfehlung_{customer_name.replace(' ', '_')}_{test_date.replace('.', '')}.docx",
         })
 
     except json.JSONDecodeError as e:

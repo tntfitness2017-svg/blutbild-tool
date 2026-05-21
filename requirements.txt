@@ -5,3 +5,4 @@ google-auth==2.38.0
 google-api-python-client==2.166.0
 gunicorn==23.0.0
 json-repair==0.30.3
+python-docx==1.2.0
