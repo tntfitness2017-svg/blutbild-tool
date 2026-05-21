@@ -176,6 +176,7 @@
       letter-spacing: 0.5px; color: var(--text-light); margin-bottom: 0.2rem;
     }
     .rec-label.urgent { color: var(--red); }
+    .rec-label.zusammenhaenge { color: #7c3aed; }
     .rec-text { font-size: 0.875rem; color: var(--text); line-height: 1.5; }
 
     .not-matched {
@@ -356,6 +357,7 @@
     const recHtml = [
       rec.dringend && rec.dringend !== 'Keine auffälligen Werte' ? `<div class="rec-item"><div class="rec-label urgent">⚠ Dringend</div><div class="rec-text">${rec.dringend}</div></div>` : '',
       rec.zusammenfassung ? `<div class="rec-item"><div class="rec-label">Zusammenfassung</div><div class="rec-text">${rec.zusammenfassung}</div></div>` : '',
+      rec.zusammenhaenge ? `<div class="rec-item"><div class="rec-label zusammenhaenge">🔗 Zusammenhänge</div><div class="rec-text">${rec.zusammenhaenge}</div></div>` : '',
       rec.ernaehrung ? `<div class="rec-item"><div class="rec-label">Ernährung</div><div class="rec-text">${rec.ernaehrung}</div></div>` : '',
       rec.training ? `<div class="rec-item"><div class="rec-label">Training</div><div class="rec-text">${rec.training}</div></div>` : '',
       rec.supplements ? `<div class="rec-item"><div class="rec-label">Supplements</div><div class="rec-text">${rec.supplements}</div></div>` : '',
@@ -369,8 +371,8 @@
       box.style.display = '';
       const list = document.getElementById('notMatchedList');
       list.innerHTML = data.not_matched.map(
-        m => `<li>${m.parameter}: ${m.wert} ${m.einheit || ''}</li>`
-      ).join('') + (data.not_matched_count > 5 ? `<li>...und ${data.not_matched_count - 5} weitere</li>` : '');
+        m => `<li><strong>${m.parameter}</strong>: ${m.wert} ${m.einheit || ''} → bitte manuell eintragen</li>`
+      ).join('');
     }
 
     result.classList.add('visible');
