@@ -89,29 +89,26 @@ def get_google_credentials():
     return service_account.Credentials.from_service_account_info(sa_info, scopes=GOOGLE_SCOPES)
 
 
-def find_or_copy_sheet(creds, customer_name):
-    """Suche nach bestehendem Kundenblatt oder kopiere Template."""
-    drive_service = build("drive", "v3", credentials=creds)
-    sheet_name = f"Blutbild – {customer_name}"
+def find_or_create_customer_tab(gc, customer_name):
+    """Suche oder erstelle einen Tab für den Kunden im Template-Dokument."""
+    sh = gc.open_by_key(TEMPLATE_SHEET_ID)
+    tab_name = customer_name[:100]  # Google Sheets max tab name length
 
-    # Bestehendes Sheet suchen
-    results = drive_service.files().list(
-        q=f"name='{sheet_name}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
-        fields="files(id, name)",
-    ).execute()
-    files = results.get("files", [])
-    if files:
-        return files[0]["id"], False  # gefunden
+    # Prüfe ob Tab bereits existiert
+    try:
+        ws = sh.worksheet(tab_name)
+        return sh, ws, False  # gefunden
+    except gspread.WorksheetNotFound:
+        pass
 
-    # Template kopieren
-    copy_body = {"name": sheet_name}
-    if OUTPUT_FOLDER_ID:
-        copy_body["parents"] = [OUTPUT_FOLDER_ID]
-
-    copy = drive_service.files().copy(
-        fileId=TEMPLATE_SHEET_ID, body=copy_body
-    ).execute()
-    return copy["id"], True  # neu erstellt
+    # Template-Tab duplizieren
+    template_ws = sh.worksheet(DASHBOARD_SHEET_NAME)
+    sh.duplicate_sheet(
+        source_sheet_id=template_ws.id,
+        new_sheet_name=tab_name,
+    )
+    ws = sh.worksheet(tab_name)
+    return sh, ws, True  # neu erstellt
 
 
 def build_param_row_map(worksheet):
@@ -261,6 +258,30 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/health")
+def health():
+    """Debug-Endpunkt um Konfiguration zu prüfen."""
+    checks = {}
+    checks["anthropic_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    checks["template_sheet_id"] = bool(os.environ.get("TEMPLATE_SHEET_ID"))
+    checks["output_folder_id"] = bool(os.environ.get("OUTPUT_FOLDER_ID"))
+    sa_raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "")
+    checks["service_account_set"] = bool(sa_raw)
+    if sa_raw:
+        try:
+            json.loads(sa_raw)
+            checks["service_account_valid_json"] = True
+        except Exception as e:
+            checks["service_account_valid_json"] = False
+            checks["service_account_error"] = str(e)[:100]
+    try:
+        creds = get_google_credentials()
+        checks["google_credentials"] = "OK"
+    except Exception as e:
+        checks["google_credentials"] = str(e)[:150]
+    return jsonify(checks)
+
+
 @app.route("/analyze", methods=["POST"])
 def analyze():
     if "file" not in request.files:
@@ -295,13 +316,7 @@ def analyze():
         creds = get_google_credentials()
         gc = gspread.authorize(creds)
 
-        sheet_id, is_new = find_or_copy_sheet(creds, customer_name)
-        sh = gc.open_by_key(sheet_id)
-
-        try:
-            ws = sh.worksheet(DASHBOARD_SHEET_NAME)
-        except gspread.WorksheetNotFound:
-            ws = sh.sheet1
+        sh, ws, is_new = find_or_create_customer_tab(gc, customer_name)
 
         # 3. Parameter-Mapping aufbauen
         param_row_map, all_values = build_param_row_map(ws)
@@ -332,12 +347,12 @@ def analyze():
         except Exception:
             pass  # Empfehlung ist optional
 
-        sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+        sheet_url = f"https://docs.google.com/spreadsheets/d/{TEMPLATE_SHEET_ID}/edit#gid={ws.id}"
 
         return jsonify({
             "success": True,
             "sheet_url": sheet_url,
-            "sheet_name": f"Blutbild – {customer_name}",
+            "sheet_name": customer_name,
             "be_column": be_name,
             "is_new_customer": is_new,
             "values_written": written,
