@@ -204,42 +204,41 @@ def analyze_with_claude(file_content, file_type):
             "source": {"type": "base64", "media_type": media_type, "data": b64},
         }
 
-    params_list = "\n".join(f"- {p}" for p in TEMPLATE_PARAMETERS)
+    params_list = "\n".join("- " + p for p in TEMPLATE_PARAMETERS)
 
-    prompt = f"""Du analysierst ein medizinisches Blutbild für einen Fitness-Coach.
+    json_template = (
+        '{\n'
+        '  "werte": {\n'
+        '    "Exakter Parameter-Name aus der Liste": "Messwert als Zahl ohne Einheit"\n'
+        '  },\n'
+        '  "nicht_zugeordnet": [\n'
+        '    {"parameter": "Name", "wert": "Wert", "einheit": "Einheit"}\n'
+        '  ],\n'
+        '  "handlungsempfehlung": {\n'
+        '    "zusammenfassung": "Zusammenfassung in 2-3 Saetzen",\n'
+        '    "dringend": "Dringende Werte oder: Keine auffaelligen Werte",\n'
+        '    "zusammenhaenge": "Welche Werte haengen zusammen und was bedeutet das fuer den Coach? Min. 3-5 konkrete Zusammenhaenge benennen.",\n'
+        '    "ernaehrung": "Ernaehrungsempfehlungen",\n'
+        '    "training": "Trainingsempfehlungen",\n'
+        '    "supplements": "Supplement-Empfehlungen mit Begruendung",\n'
+        '    "followup": "Wann naechstes Blutbild"\n'
+        '  }\n'
+        '}'
+    )
 
-Unten findest du die vollständige Liste aller Parameter aus unserem Tracking-System.
-Ordne JEDEN im Blutbild gefundenen Wert dem passenden Parameter aus dieser Liste zu.
-
-PARAMETER-LISTE (verwende exakt diese Namen):
-{params_list}
-
-MATCHING-REGELN (sehr wichtig):
-- Ignoriere Einheiten, Klammern und kleine Schreibweisen beim Matching (z.B. "Leukozyten 4,5" → "Leukozyten (G/l)")
-- Ordne auch zu wenn der Name leicht abweicht (z.B. "Hb" → "Hämoglobin / Hb (g/dl)", "eGFR" → "GFR CKD-EPI (ml/min/1.73m²)")
-- Nur wenn KEINE sinnvolle Zuordnung möglich ist → 'nicht_zugeordnet'
-- Ziel: möglichst wenige Werte in 'nicht_zugeordnet'
-
-Antworte ausschließlich mit gültigem JSON – kein Text davor oder danach:
-
-{{
-  "werte": {{
-    "Exakter Parameter-Name aus der Liste": "gemessener Wert als String (nur Zahl, keine Einheit)",
-    ...
-  }},
-  "nicht_zugeordnet": [
-    {{"parameter": "Name im Blutbild", "wert": "Wert", "einheit": "Einheit"}}
-  ],
-  "handlungsempfehlung": {{
-    "zusammenfassung": "Medizinische Zusammenfassung in 2-3 Sätzen",
-    "dringend": "Werte die sofortige Aufmerksamkeit brauchen – oder 'Keine auffälligen Werte'",
-    "zusammenhaenge": "Welche Werte hängen miteinander zusammen und was bedeutet das? (z.B. 'Erhöhtes Ferritin + erhöhtes CRP → Entzündungsreaktion wahrscheinlich. Empfehlung: ...'). Mindestens 3-5 konkrete Zusammenhänge aus diesem Blutbild erklären – als praktischer Info für den Coach.",
-    "ernaehrung": "Konkrete Ernährungsempfehlungen basierend auf den Werten",
-    "training": "Trainingsempfehlungen und eventuelle Einschränkungen",
-    "supplements": "Empfohlene Supplements mit Begründung (z.B. Vitamin D, Magnesium)",
-    "followup": "Empfehlung wann das nächste Blutbild sinnvoll ist"
-  }}
-}}
+    prompt = (
+        "Du analysierst ein medizinisches Blutbild fuer einen Fitness-Coach.\n\n"
+        "Ordne JEDEN Wert dem passenden Parameter aus dieser Liste zu:\n\n"
+        "PARAMETER-LISTE (exakt diese Namen verwenden):\n"
+        + params_list +
+        "\n\nMATCHING-REGELN:\n"
+        "- Ignoriere Einheiten und Klammern beim Matching\n"
+        "- Ordne auch zu wenn der Name leicht abweicht (z.B. Hb -> Haemoglobin)\n"
+        "- Nur wenn KEINE Zuordnung moeglich: 'nicht_zugeordnet'\n"
+        "- Ziel: moeglichst wenige Werte in nicht_zugeordnet\n\n"
+        "Antworte NUR mit gueltigem JSON:\n\n"
+        + json_template
+    )
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
