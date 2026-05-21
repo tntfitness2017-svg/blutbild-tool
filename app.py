@@ -247,11 +247,27 @@ def analyze_with_claude(file_content, file_type):
     )
 
     text = message.content[0].text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-    return json.loads(text.strip())
+    # Robust JSON extraction
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Strip code fences
+    if "```" in text:
+        for part in text.split("```"):
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            try:
+                return json.loads(part)
+            except json.JSONDecodeError:
+                continue
+    # Find first { to last }
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start != -1 and end > start:
+        return json.loads(text[start:end])
+    raise json.JSONDecodeError("No JSON found", text, 0)
 
 
 @app.route("/")
