@@ -2,6 +2,7 @@ import os
 import base64
 import json
 from datetime import datetime
+from json_repair import repair_json
 from flask import Flask, request, jsonify, render_template
 import anthropic
 import gspread
@@ -247,27 +248,26 @@ def analyze_with_claude(file_content, file_type):
     )
 
     text = message.content[0].text.strip()
-    # Robust JSON extraction
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
     # Strip code fences
     if "```" in text:
         for part in text.split("```"):
             part = part.strip()
             if part.startswith("json"):
                 part = part[4:].strip()
-            try:
-                return json.loads(part)
-            except json.JSONDecodeError:
-                continue
-    # Find first { to last }
+            if part.startswith("{"):
+                text = part
+                break
+    # Find JSON boundaries
     start = text.find("{")
     end = text.rfind("}") + 1
     if start != -1 and end > start:
-        return json.loads(text[start:end])
-    raise json.JSONDecodeError("No JSON found", text, 0)
+        text = text[start:end]
+    # Try direct parse, then repair
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        repaired = repair_json(text)
+        return json.loads(repaired)
 
 
 @app.route("/")
