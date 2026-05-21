@@ -1,4 +1,5 @@
 import os
+import re
 import base64
 import json
 from datetime import datetime
@@ -75,6 +76,13 @@ TEMPLATE_PARAMETERS = [
     # Hormone
     "Gesamt-Testosteron (ng/ml)", "Testosteron, frei (pg/ml)",
     "SHBG (nmol/l)", "Estradiol / E2 (pg/ml)",
+    # Zusaetzliche haeufige Parameter
+    "Ferritin (ng/ml)", "Transferrin (mg/dl)", "Transferrinsaettigung (%)",
+    "Magnesium (mmol/l)", "TSH (mU/l)", "Freies T4 (ng/dl)",
+    "Coenzym Q10 (ug/ml)", "Malondialdehyd (umol/l)",
+    "Pyridoxalphosphat / Vitamin B6 (ug/l)",
+    "Holotranscobalamin / aktives B12 (pmol/l)",
+    "Thiamin-diphosphat / Vitamin B1 (nmol/l)",
 ]
 
 
@@ -234,20 +242,23 @@ def analyze_with_claude(file_content, file_type):
         "\n\nMATCHING RULES - be aggressive in matching:\n"
         "- HDL-Cholesterin -> HDL-C (mg/dL)\n"
         "- LDL-Cholesterin -> LDL-C (mg/dL)\n"
-        "- Apolipoprotein B -> ApoB (mg/dL)\n"
+        "- Apolipoprotein B, Apo-B -> ApoB (mg/dL)\n"
         "- Haemoglobin, Hb -> Haemoglobin / Hb (g/dl)\n"
         "- eGFR, GFR -> GFR CKD-EPI (ml/min/1.73m2)\n"
-        "- Kreatinin -> Kreatinin (mg/dl)\n"
-        "- Harnstoff -> Harnstoff (mg/dl)\n"
-        "- Harnsaeure -> Harnsaeure (mg/dl)\n"
         "- Folsaeure -> Vitamin B9\n"
-        "- Thiamin -> Vitamin B1\n"
-        "- Holotranscobalamin, aktives B12 -> Vitamin B12\n"
+        "- Thiamin, Thiamin-diphosphat -> Thiamin-diphosphat / Vitamin B1 (nmol/l)\n"
+        "- Pyridoxalphosphat -> Pyridoxalphosphat / Vitamin B6 (ug/l)\n"
+        "- Holotranscobalamin, aktives B12 -> Holotranscobalamin / aktives B12 (pmol/l)\n"
         "- SHBG, Sexualhormon-bindendes Globulin -> SHBG\n"
-        "- TSH, TSH-basal -> fT3\n"
-        "- freies T4 -> fT3\n"
-        "- Ferritin -> Eisen\n"
-        "- Eisen (Serum) -> Eisen\n"
+        "- TSH, TSH-basal -> TSH (mU/l)\n"
+        "- freies T4, fT4 -> Freies T4 (ng/dl)\n"
+        "- Ferritin -> Ferritin (ng/ml)\n"
+        "- Transferrin -> Transferrin (mg/dl)\n"
+        "- Transferrinsaettigung -> Transferrinsaettigung (%)\n"
+        "- Magnesium -> Magnesium (mmol/l)\n"
+        "- Coenzym Q10 -> Coenzym Q10 (ug/ml)\n"
+        "- Malondialdehyd, MDA -> Malondialdehyd (umol/l)\n"
+        "- Eisen (Serum), Eisen -> Eisen\n"
         "- Ignore units and parentheses when matching\n"
         "- Only put in 'nicht_zugeordnet' if truly no match exists\n\n"
         "Respond ONLY with valid JSON (no explanation, no code fences):\n"
@@ -287,34 +298,30 @@ def analyze_with_claude(file_content, file_type):
     )
     rec_text = msg2.content[0].text.strip()
 
-    # Parse sections
+    # Parse sections - robust against markdown formatting
+    section_patterns = [
+        (r'zusammenfassung', 'zusammenfassung'),
+        (r'dringend', 'dringend'),
+        (r'zusammenh[aä]nge', 'zusammenhaenge'),
+        (r'ern[aä]hrung', 'ernaehrung'),
+        (r'training', 'training'),
+        (r'supplement', 'supplements'),
+        (r'follow.?up|followup', 'followup'),
+    ]
+    all_labels = '|'.join(f'(?:{p})' for p, _ in section_patterns)
+    split_re = re.compile(
+        r'(?:^|\n)\s*[#*_\-]*\s*(' + all_labels + r')[*_\-]*\s*:?\s*[*_]*\s*',
+        re.IGNORECASE | re.MULTILINE
+    )
+    parts = split_re.split(rec_text)
     rec = {}
-    section_map = {
-        "ZUSAMMENFASSUNG": "zusammenfassung",
-        "DRINGEND": "dringend",
-        "ZUSAMMENHAENGE": "zusammenhaenge",
-        "ERNAEHRUNG": "ernaehrung",
-        "TRAINING": "training",
-        "SUPPLEMENTS": "supplements",
-        "FOLLOWUP": "followup",
-    }
-    current_key = None
-    current_lines = []
-    for line in rec_text.splitlines():
-        line = line.strip()
-        matched = False
-        for label, key in section_map.items():
-            if line.upper().startswith(label + ":"):
-                if current_key:
-                    rec[current_key] = " ".join(current_lines).strip()
-                current_key = key
-                current_lines = [line[len(label)+1:].strip()]
-                matched = True
+    for i in range(1, len(parts) - 1, 2):
+        label_found = parts[i].strip().lower()
+        content = parts[i + 1].strip() if i + 1 < len(parts) else ""
+        for pattern, key in section_patterns:
+            if re.match(pattern, label_found, re.IGNORECASE):
+                rec[key] = content
                 break
-        if not matched and current_key and line:
-            current_lines.append(line)
-    if current_key:
-        rec[current_key] = " ".join(current_lines).strip()
 
     data["handlungsempfehlung"] = rec
     return data
