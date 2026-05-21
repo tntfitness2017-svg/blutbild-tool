@@ -1,416 +1,376 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Blutbild-Analyse – TNT Fitness</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+import os
+import base64
+import json
+from datetime import datetime
+from flask import Flask, request, jsonify, render_template
+import anthropic
+import gspread
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
-    :root {
-      --orange: #e04a00;
-      --orange-dark: #b83c00;
-      --dark: #1a1a2e;
-      --gray: #f4f4f6;
-      --gray-mid: #e2e2e8;
-      --text: #1a1a2e;
-      --text-light: #6b7280;
-      --green: #16a34a;
-      --green-bg: #f0fdf4;
-      --red: #dc2626;
-    }
+app = Flask(__name__)
 
-    body {
-      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
-      background: var(--gray);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
+ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
-    header {
-      background: var(--dark);
-      padding: 0 2rem;
-      height: 64px;
-      display: flex;
-      align-items: center;
-    }
-    .logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
-    .logo-icon {
-      width: 36px; height: 36px;
-      background: var(--orange);
-      border-radius: 8px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px; font-weight: 900; color: white;
-    }
-    .logo-text { font-size: 1.1rem; font-weight: 700; color: white; }
-    .logo-sub { font-size: 0.7rem; color: rgba(255,255,255,0.5); letter-spacing: 1px; text-transform: uppercase; }
+TEMPLATE_SHEET_ID = os.environ.get("TEMPLATE_SHEET_ID", "1ZXptiINCbkZ2fBGNDQ5Qr-rrqor-IETSYbSFZ3xlUNI")
+OUTPUT_FOLDER_ID = os.environ.get("OUTPUT_FOLDER_ID", "")
+DASHBOARD_SHEET_NAME = "Blutbild Dashboard MUSTER"
 
-    main {
-      flex: 1;
-      max-width: 660px;
-      width: 100%;
-      margin: 3rem auto;
-      padding: 0 1rem;
-    }
+GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
-    .hero { text-align: center; margin-bottom: 2rem; }
-    .hero h1 { font-size: 1.8rem; font-weight: 800; margin-bottom: 0.5rem; }
-    .hero h1 span { color: var(--orange); }
-    .hero p { font-size: 0.95rem; color: var(--text-light); line-height: 1.6; }
+# Alle 170 Parameter-Namen exakt wie im Template
+TEMPLATE_PARAMETERS = [
+    "Harnstoff (mg/dl)", "Harnsäure (mg/dl)", "Kreatinin (mg/dl)",
+    "GFR CKD-EPI (ml/min/1.73m²)", "Cystatin C (mg/L)", "GFR Cystatin (mL/min)",
+    "Gesamt-IgE (kU/l)", "Amylase, Lipase (U/l)",
+    "Fettsäuren der Erythrozytenmembran", "Aminosäurestatus",
+    "Vitamin C (mg/l)", "Biotin (Vitamin H) (ng/l)", "Vitamin K1/K2",
+    "Methylgruppendonatoren", "8-Hydroxydesoxyguanosin (8-OHdG)",
+    "BHI-PLUS (Bioenergetischer Gesundheitsindex)",
+    "Ergänzende Biomarker (ursächliche Faktoren)", "mt/n-DNA-Ratio",
+    "LDH + LDH-Isoenzyme (U/l)", "Lactat-Pyruvat-Ratio",
+    "Organische Säuren des Zitronensäurezyklus", "TKTL-1 und APO-10", "M2PK Blut",
+    "Oxidative Belastung", "Lipidperoxidation", "Crosslinks", "CK-MB (U/l)",
+    "Lipoprotein (a) (nmol/l)", "Profil Glutathionstoffwechsel", "Thiol-Status",
+    "Glutathionperoxidase (GPx)", "Superoxiddismutase (SOD)", "Basisprofil Darm",
+    "Malabsorption: α1-AT, Calprotectin", "Schleimhautimmunität: sIgA",
+    "Histamin im Stuhl", "Zonulin im Serum",
+    "Mikrobiom Mini (Bakteriom + Mykobiom)", "Mikrobiom Midi (+ Parasiten)",
+    "Mikrobiom Maxi (+ Parasiten)", "Maldigestion, Malabsorption (MIS)",
+    "Mikrobolom 1.0 NEU", "RANTES (CCL5) (pg/ml)", "Histamin-Abbaukapazität (DAO)",
+    "GPCR-Autoantikörper Basis", "Zellulärer Immunstatus",
+    "sIL2R (T-Zellaktivierung) (U/ml)", "Neopterin", "TH1/TH2/TH17 (inkl. IL-17)",
+    "IDO-Aktivität, TRP/KYN", "Pregnenolonsulfat (ng/ml)", "Östrogenmetabolite",
+    "Somatomedin C / IGF-1 (ng/ml)", "Neurotransmitter Plus",
+    "NT-Tryptophan-Metabolismus", "Neuronenspezifische Enolase (NSE)",
+    "HOMA-Index", "HbA1c", "AGEs", "GPT", "NT-proBNP", "LDH 4 und 5",
+    "LDL-Cholesterin", "Lipo(a)", "Zonulin", "I-FABP", "HPU (Pyrrole im Urin)",
+    "TPO-AK", "TAK", "Nitrotyrosin", "CRP", "oxLDL", "MDA-LDL", "LDL",
+    "Kreatinin", "Harnsäure", "Beta-Cross-Laps", "Trap 5b", "Lp-PLA2", "Apo-B",
+    "Cystatin C", "CK", "Hämoglobin", "BDNF", "Serotonin", "Cortisol", "Calcium",
+    "fT3", "PSA", "Homocystein", "MCV", "MCH", "Histamin", "PTH", "Calcitriol",
+    "Mikronährstoff", "Vitamin A", "Vitamin B1", "Vitamin B2", "Vitamin B3",
+    "Vitamin B5", "Vitamin B6", "Vitamin B7", "Vitamin B9", "Vitamin B12",
+    "Calcidiol", "Vitamin E", "Vitamin K2",
+    "Chrom", "Jod", "Molybdän", "Selen", "Bor", "Kupfer", "Zink", "Mangan",
+    "Eisen",
+    "Testosteron (gesamt)", "Freier Androgenindex (FAI)", "DHEA-S",
+    "Freies Testosteron", "Estradiol (E2)", "Progesteron",
+    "LH (Luteinisierendes Hormon)", "FSH (Follikelstimulierendes Hormon)",
+    "SHBG", "Albumin",
+    # Herz & Gefäße
+    "Glucose nüchtern (mg/dL)", "Insulin Nüchtern", "HbA1c (%)", "AGE (Advanced Glycation Endproduct)",
+    "Cholesterin (mg/dl)", "ApoB (mg/dL)", "Apo A1", "LDL-C (mg/dL)",
+    "Non-HDL-Cholesterin (mg/dL)", "Triglyceride (mg/dL)", "HDL-C (mg/dL)",
+    "Homocystein (μmol/L)", "Lipoprotein(a) / Lp(a) (nmol/l)",
+    # Blutbild
+    "Erythrozyten (Mio/μl)", "Hämatokrit (%)", "Hämoglobin / Hb (g/dl)",
+    "MCH (pg)", "MCHC (g/dl)", "MCV (fl)", "RDW-CV (%)", "RDW-SD (fl)",
+    "Leukozyten (G/l)", "Lymphozyten (G/l)", "Neutrophile (G/l)",
+    # Hormone
+    "Gesamt-Testosteron (ng/ml)", "Testosteron, frei (pg/ml)",
+    "SHBG (nmol/l)", "Estradiol / E2 (pg/ml)",
+]
 
-    .steps {
-      display: flex; gap: 0.5rem; margin-bottom: 2rem; justify-content: center;
-    }
-    .step { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-light); }
-    .step-num {
-      width: 20px; height: 20px; background: var(--gray-mid); border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.7rem; font-weight: 700; color: var(--text-light);
-    }
-    .step.active .step-num { background: var(--orange); color: white; }
-    .step-sep { color: var(--gray-mid); font-size: 0.7rem; }
 
-    .card {
-      background: white;
-      border-radius: 16px;
-      padding: 2rem;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.05);
-    }
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-    .field { margin-bottom: 1.5rem; }
-    label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; }
 
-    input[type="text"] {
-      width: 100%; padding: 0.75rem 1rem;
-      border: 1.5px solid var(--gray-mid); border-radius: 10px;
-      font-size: 1rem; color: var(--text); outline: none; transition: border-color 0.2s;
-    }
-    input[type="text"]:focus { border-color: var(--orange); }
-    input[type="text"]::placeholder { color: var(--text-light); }
+def get_google_credentials():
+    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT")
+    if not sa_json:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT Umgebungsvariable fehlt")
+    sa_info = json.loads(sa_json)
+    return service_account.Credentials.from_service_account_info(sa_info, scopes=GOOGLE_SCOPES)
 
-    .upload-zone {
-      border: 2px dashed var(--gray-mid); border-radius: 12px;
-      padding: 2.5rem 1.5rem; text-align: center; cursor: pointer;
-      transition: border-color 0.2s, background 0.2s; position: relative;
-    }
-    .upload-zone:hover, .upload-zone.dragover { border-color: var(--orange); background: #fff5f2; }
-    .upload-zone input[type="file"] {
-      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
-    }
-    .upload-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
-    .upload-zone p { font-size: 0.9rem; color: var(--text-light); }
-    .upload-zone strong { color: var(--orange); }
-    .upload-hint { font-size: 0.75rem; margin-top: 0.4rem; color: #9ca3af; }
 
-    .file-selected {
-      display: none; align-items: center; gap: 0.75rem;
-      padding: 0.75rem 1rem;
-      background: var(--green-bg); border: 1.5px solid #86efac;
-      border-radius: 10px; margin-top: 0.75rem;
-    }
-    .file-selected.visible { display: flex; }
-    .file-name { font-size: 0.85rem; font-weight: 600; color: var(--green); word-break: break-all; }
-    .remove-file {
-      margin-left: auto; background: none; border: none;
-      cursor: pointer; font-size: 1.1rem; color: #6b7280;
-    }
+def find_or_create_customer_tab(gc, customer_name):
+    """Suche oder erstelle einen Tab für den Kunden im Template-Dokument."""
+    sh = gc.open_by_key(TEMPLATE_SHEET_ID)
+    tab_name = customer_name[:100]  # Google Sheets max tab name length
 
-    .btn {
-      width: 100%; padding: 0.9rem;
-      background: var(--orange); color: white;
-      border: none; border-radius: 12px;
-      font-size: 1rem; font-weight: 700; cursor: pointer;
-      transition: background 0.2s, transform 0.1s; letter-spacing: 0.3px;
-    }
-    .btn:hover { background: var(--orange-dark); }
-    .btn:active { transform: scale(0.99); }
-    .btn:disabled { background: #d1d5db; cursor: not-allowed; }
+    # Prüfe ob Tab bereits existiert
+    try:
+        ws = sh.worksheet(tab_name)
+        return sh, ws, False  # gefunden
+    except gspread.WorksheetNotFound:
+        pass
 
-    /* LOADING */
-    .loading { display: none; text-align: center; padding: 2rem 0 0.5rem; }
-    .loading.visible { display: block; }
-    .spinner {
-      width: 44px; height: 44px;
-      border: 4px solid var(--gray-mid); border-top-color: var(--orange);
-      border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 1rem;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .loading p { font-size: 0.9rem; color: var(--text-light); }
-    .loading-steps { font-size: 0.8rem; color: #9ca3af; margin-top: 0.5rem; }
+    # Template-Tab duplizieren
+    template_ws = sh.worksheet(DASHBOARD_SHEET_NAME)
+    sh.duplicate_sheet(
+        source_sheet_id=template_ws.id,
+        new_sheet_name=tab_name,
+    )
+    ws = sh.worksheet(tab_name)
+    return sh, ws, True  # neu erstellt
 
-    /* RESULT */
-    .result { display: none; }
-    .result.visible { display: block; }
 
-    .result-success {
-      background: var(--green-bg); border: 1.5px solid #86efac;
-      border-radius: 12px; padding: 1.5rem; margin-bottom: 1.25rem;
-    }
-    .result-success h3 { font-size: 1rem; font-weight: 700; color: var(--green); margin-bottom: 0.5rem; }
-    .result-meta { font-size: 0.82rem; color: #374151; margin-bottom: 1rem; line-height: 1.7; }
-    .result-meta span { font-weight: 600; }
+def build_param_row_map(worksheet):
+    """Erstellt Mapping: parameter_name → zeilen_index (1-basiert)."""
+    all_values = worksheet.get_all_values()
+    param_map = {}
+    for i, row in enumerate(all_values):
+        if row and row[0].strip():
+            name = row[0].strip()
+            if name not in param_map:  # nur erste Vorkommen
+                param_map[name] = i + 1
+    return param_map, all_values
 
-    .sheet-link {
-      display: flex; align-items: center; gap: 0.6rem;
-      background: var(--green); color: white;
-      padding: 0.75rem 1.25rem; border-radius: 10px;
-      text-decoration: none; font-weight: 700; font-size: 0.9rem;
-      transition: background 0.2s;
-    }
-    .sheet-link:hover { background: #15803d; }
 
-    .recommendation {
-      background: #f9fafb; border: 1px solid var(--gray-mid);
-      border-radius: 12px; padding: 1.25rem; margin-bottom: 1.25rem;
-    }
-    .recommendation h3 {
-      font-size: 0.9rem; font-weight: 700; color: var(--dark);
-      margin-bottom: 1rem; padding-bottom: 0.5rem;
-      border-bottom: 1px solid var(--gray-mid);
-    }
-    .rec-item { margin-bottom: 0.9rem; }
-    .rec-label {
-      font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.5px; color: var(--text-light); margin-bottom: 0.2rem;
-    }
-    .rec-label.urgent { color: var(--red); }
-    .rec-label.zusammenhaenge { color: #7c3aed; }
-    .rec-text { font-size: 0.875rem; color: var(--text); line-height: 1.5; }
+def find_be_column(all_values):
+    """Findet den Index der Kopfzeile und die nächste freie BE-Spalte."""
+    header_row_idx = None
+    be_col_map = {}
 
-    .not-matched {
-      background: #fffbeb; border: 1px solid #fcd34d;
-      border-radius: 10px; padding: 1rem; font-size: 0.82rem;
-    }
-    .not-matched h4 { font-weight: 700; margin-bottom: 0.4rem; color: #92400e; }
-    .not-matched li { color: #78350f; margin-left: 1.2rem; line-height: 1.8; }
+    for i, row in enumerate(all_values):
+        if "BE 1" in row and "BE 2" in row:
+            header_row_idx = i
+            for j, cell in enumerate(row):
+                if cell.strip() in ("BE 1", "BE 2", "BE 3", "BE 4"):
+                    be_col_map[cell.strip()] = j
+            break
 
-    .btn-again {
-      width: 100%; padding: 0.75rem;
-      background: white; color: var(--orange);
-      border: 2px solid var(--orange); border-radius: 12px;
-      font-size: 0.95rem; font-weight: 700; cursor: pointer;
-      transition: background 0.15s; margin-top: 1rem;
-    }
-    .btn-again:hover { background: #fff5f2; }
+    if header_row_idx is None:
+        return None, None, None
 
-    /* ERROR */
-    .error-box {
-      display: none; background: #fef2f2;
-      border: 1.5px solid #fca5a5; border-radius: 10px;
-      padding: 1rem 1.25rem; margin-top: 1.25rem;
-      font-size: 0.875rem; color: var(--red);
-    }
-    .error-box.visible { display: block; }
+    # Nächste freie BE-Spalte finden
+    for be_name in ("BE 1", "BE 2", "BE 3", "BE 4"):
+        if be_name not in be_col_map:
+            continue
+        col_idx = be_col_map[be_name]
+        # Prüfe ob Spalte leer ist (Zeilen nach Header)
+        col_vals = [
+            row[col_idx] if col_idx < len(row) else ""
+            for row in all_values[header_row_idx + 1:]
+        ]
+        if not any(v.strip() for v in col_vals):
+            return header_row_idx, col_idx, be_name
 
-    footer { text-align: center; padding: 2rem 1rem; font-size: 0.78rem; color: #9ca3af; }
-  </style>
-</head>
-<body>
+    # Fallback: BE 4
+    return header_row_idx, be_col_map.get("BE 4", 5), "BE 4"
 
-<header>
-  <a href="https://tntfitness.de" class="logo">
-    <div class="logo-icon">T</div>
-    <div>
-      <div class="logo-text">TNT Fitness</div>
-      <div class="logo-sub">Coach-Tool</div>
-    </div>
-  </a>
-</header>
 
-<main>
-  <div class="hero">
-    <h1>Blutbild <span>analysieren</span></h1>
-    <p>PDF oder Foto hochladen → Werte werden automatisch in das<br>Google Sheets Tracking des Kunden eingetragen.</p>
-  </div>
+def write_values_to_sheet(worksheet, param_row_map, all_values, col_idx, header_row_idx, mapped_values, test_date):
+    """Schreibt die Blutwerte in die richtige Spalte."""
+    updates = []
 
-  <div class="steps" id="steps">
-    <div class="step active" id="step1"><div class="step-num">1</div><span>Hochladen</span></div>
-    <div class="step-sep">›</div>
-    <div class="step" id="step2"><div class="step-num">2</div><span>Analyse</span></div>
-    <div class="step-sep">›</div>
-    <div class="step" id="step3"><div class="step-num">3</div><span>Fertig in Google Sheets</span></div>
-  </div>
+    # Datum in die Kopfzeile schreiben (Zeile über den Parametern, falls vorhanden)
+    date_row = header_row_idx  # Header selbst
+    # Schreibe Datum eine Zeile über dem Header, falls machbar
+    if header_row_idx > 0:
+        date_row_idx = header_row_idx - 1
+        updates.append({
+            "range": gspread.utils.rowcol_to_a1(date_row_idx + 1, col_idx + 1),
+            "values": [[test_date]],
+        })
 
-  <div class="card">
+    # Werte eintragen
+    written = 0
+    for param_name, value in mapped_values.items():
+        if param_name in param_row_map:
+            row_num = param_row_map[param_name]
+            updates.append({
+                "range": gspread.utils.rowcol_to_a1(row_num, col_idx + 1),
+                "values": [[str(value)]],
+            })
+            written += 1
 
-    <!-- FORMULAR -->
-    <form id="uploadForm">
-      <div class="field">
-        <label for="customer_name">Name des Kunden</label>
-        <input type="text" id="customer_name" name="customer_name"
-               placeholder="z.B. Max Mustermann" required autocomplete="off" />
-      </div>
+    if updates:
+        worksheet.batch_update(updates)
 
-      <div class="field">
-        <label>Blutbild hochladen</label>
-        <div class="upload-zone" id="dropZone">
-          <input type="file" id="fileInput" name="file" accept=".pdf,.jpg,.jpeg,.png" required />
-          <div class="upload-icon">📋</div>
-          <p><strong>Klicken</strong> oder Datei hier reinziehen</p>
-          <p class="upload-hint">PDF, JPG oder PNG · max. 20 MB</p>
-        </div>
-        <div class="file-selected" id="fileSelected">
-          <span>📄</span>
-          <span class="file-name" id="fileName"></span>
-          <button type="button" class="remove-file" id="removeFile">✕</button>
-        </div>
-      </div>
+    return written
 
-      <button type="submit" class="btn" id="submitBtn">Blutbild analysieren →</button>
-      <div class="error-box" id="errorBox"></div>
-    </form>
 
-    <!-- LOADING -->
-    <div class="loading" id="loading">
-      <div class="spinner"></div>
-      <p><strong>Blutbild wird ausgewertet…</strong></p>
-      <p class="loading-steps">Claude liest Werte · Ordnet Template-Parameter zu · Trägt in Google Sheets ein</p>
-    </div>
+def analyze_with_claude(file_content, file_type):
+    """Claude analysiert das Blutbild und ordnet Werte den Template-Parametern zu."""
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    b64 = base64.standard_b64encode(file_content).decode("utf-8")
 
-    <!-- ERGEBNIS -->
-    <div class="result" id="result">
+    if "pdf" in file_type:
+        content_block = {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+        }
+    else:
+        media_type = file_type if file_type.startswith("image/") else "image/jpeg"
+        content_block = {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": b64},
+        }
 
-      <div class="result-success">
-        <h3>✓ Fertig eingetragen</h3>
-        <div class="result-meta" id="resultMeta"></div>
-        <a href="#" class="sheet-link" id="sheetLink" target="_blank">
-          📊 Google Sheet öffnen →
-        </a>
-      </div>
+    params_list = "\n".join(f"- {p}" for p in TEMPLATE_PARAMETERS)
 
-      <div class="recommendation" id="recommendationBox">
-        <h3>Handlungsempfehlung</h3>
-        <div id="recommendationContent"></div>
-      </div>
+    prompt = f"""Du analysierst ein medizinisches Blutbild für einen Fitness-Coach.
 
-      <div class="not-matched" id="notMatchedBox" style="display:none; margin-bottom:1.25rem;">
-        <h4>⚠️ Nicht zugeordnete Werte</h4>
-        <ul id="notMatchedList"></ul>
-      </div>
+Unten findest du die vollständige Liste aller Parameter aus unserem Tracking-System.
+Ordne JEDEN im Blutbild gefundenen Wert dem passenden Parameter aus dieser Liste zu.
 
-      <button class="btn-again" id="btnAgain">Weiteres Blutbild analysieren</button>
-    </div>
+PARAMETER-LISTE (verwende exakt diese Namen):
+{params_list}
 
-  </div>
-</main>
+MATCHING-REGELN (sehr wichtig):
+- Ignoriere Einheiten, Klammern und kleine Schreibweisen beim Matching (z.B. "Leukozyten 4,5" → "Leukozyten (G/l)")
+- Ordne auch zu wenn der Name leicht abweicht (z.B. "Hb" → "Hämoglobin / Hb (g/dl)", "eGFR" → "GFR CKD-EPI (ml/min/1.73m²)")
+- Nur wenn KEINE sinnvolle Zuordnung möglich ist → 'nicht_zugeordnet'
+- Ziel: möglichst wenige Werte in 'nicht_zugeordnet'
 
-<footer>© 2025 TNT Fitness · Nur für interne Coach-Verwendung</footer>
+Antworte ausschließlich mit gültigem JSON – kein Text davor oder danach:
 
-<script>
-  const form = document.getElementById('uploadForm');
-  const fileInput = document.getElementById('fileInput');
-  const dropZone = document.getElementById('dropZone');
-  const fileSelected = document.getElementById('fileSelected');
-  const fileName = document.getElementById('fileName');
-  const removeFile = document.getElementById('removeFile');
-  const submitBtn = document.getElementById('submitBtn');
-  const loading = document.getElementById('loading');
-  const errorBox = document.getElementById('errorBox');
-  const result = document.getElementById('result');
+{{
+  "werte": {{
+    "Exakter Parameter-Name aus der Liste": "gemessener Wert als String (nur Zahl, keine Einheit)",
+    ...
+  }},
+  "nicht_zugeordnet": [
+    {{"parameter": "Name im Blutbild", "wert": "Wert", "einheit": "Einheit"}}
+  ],
+  "handlungsempfehlung": {{
+    "zusammenfassung": "Medizinische Zusammenfassung in 2-3 Sätzen",
+    "dringend": "Werte die sofortige Aufmerksamkeit brauchen – oder 'Keine auffälligen Werte'",
+    "zusammenhaenge": "Welche Werte hängen miteinander zusammen und was bedeutet das? (z.B. 'Erhöhtes Ferritin + erhöhtes CRP → Entzündungsreaktion wahrscheinlich. Empfehlung: ...'). Mindestens 3-5 konkrete Zusammenhänge aus diesem Blutbild erklären – als praktischer Info für den Coach.",
+    "ernaehrung": "Konkrete Ernährungsempfehlungen basierend auf den Werten",
+    "training": "Trainingsempfehlungen und eventuelle Einschränkungen",
+    "supplements": "Empfohlene Supplements mit Begründung (z.B. Vitamin D, Magnesium)",
+    "followup": "Empfehlung wann das nächste Blutbild sinnvoll ist"
+  }}
+}}
 
-  function showFile(file) {
-    fileName.textContent = file.name;
-    fileSelected.classList.add('visible');
-    dropZone.style.display = 'none';
-  }
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": [content_block, {"type": "text", "text": prompt}]}],
+    )
 
-  function clearFile() {
-    fileInput.value = '';
-    fileSelected.classList.remove('visible');
-    dropZone.style.display = '';
-  }
+    text = message.content[0].text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    return json.loads(text.strip())
 
-  fileInput.addEventListener('change', () => { if (fileInput.files[0]) showFile(fileInput.files[0]); });
-  removeFile.addEventListener('click', clearFile);
 
-  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
-  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-  dropZone.addEventListener('drop', e => {
-    e.preventDefault();
-    dropZone.classList.remove('dragover');
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      const dt = new DataTransfer(); dt.items.add(file);
-      fileInput.files = dt.files; showFile(file);
-    }
-  });
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-  function setStep(n) {
-    [1,2,3].forEach(i => {
-      document.getElementById('step'+i).classList.toggle('active', i === n);
-    });
-  }
 
-  function showResult(data) {
-    setStep(3);
-    const isNew = data.is_new_customer;
-    document.getElementById('resultMeta').innerHTML =
-      `<span>${data.values_written} Werte</span> eingetragen in Spalte <span>${data.be_column}</span> · ` +
-      (isNew ? `<span>Neues Sheet erstellt</span>` : `<span>Bestehendes Sheet aktualisiert</span>`);
+@app.route("/health")
+def health():
+    """Debug-Endpunkt um Konfiguration zu prüfen."""
+    checks = {}
+    checks["anthropic_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    checks["template_sheet_id"] = bool(os.environ.get("TEMPLATE_SHEET_ID"))
+    checks["output_folder_id"] = bool(os.environ.get("OUTPUT_FOLDER_ID"))
+    sa_raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "")
+    checks["service_account_set"] = bool(sa_raw)
+    if sa_raw:
+        try:
+            json.loads(sa_raw)
+            checks["service_account_valid_json"] = True
+        except Exception as e:
+            checks["service_account_valid_json"] = False
+            checks["service_account_error"] = str(e)[:100]
+    try:
+        creds = get_google_credentials()
+        checks["google_credentials"] = "OK"
+    except Exception as e:
+        checks["google_credentials"] = str(e)[:150]
+    return jsonify(checks)
 
-    document.getElementById('sheetLink').href = data.sheet_url;
 
-    // Empfehlung
-    const rec = data.recommendation || {};
-    const recHtml = [
-      rec.dringend && rec.dringend !== 'Keine auffälligen Werte' ? `<div class="rec-item"><div class="rec-label urgent">⚠ Dringend</div><div class="rec-text">${rec.dringend}</div></div>` : '',
-      rec.zusammenfassung ? `<div class="rec-item"><div class="rec-label">Zusammenfassung</div><div class="rec-text">${rec.zusammenfassung}</div></div>` : '',
-      rec.zusammenhaenge ? `<div class="rec-item"><div class="rec-label zusammenhaenge">🔗 Zusammenhänge</div><div class="rec-text">${rec.zusammenhaenge}</div></div>` : '',
-      rec.ernaehrung ? `<div class="rec-item"><div class="rec-label">Ernährung</div><div class="rec-text">${rec.ernaehrung}</div></div>` : '',
-      rec.training ? `<div class="rec-item"><div class="rec-label">Training</div><div class="rec-text">${rec.training}</div></div>` : '',
-      rec.supplements ? `<div class="rec-item"><div class="rec-label">Supplements</div><div class="rec-text">${rec.supplements}</div></div>` : '',
-      rec.followup ? `<div class="rec-item"><div class="rec-label">Follow-up</div><div class="rec-text">${rec.followup}</div></div>` : '',
-    ].filter(Boolean).join('');
-    document.getElementById('recommendationContent').innerHTML = recHtml;
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    if "file" not in request.files:
+        return jsonify({"error": "Keine Datei hochgeladen"}), 400
 
-    // Nicht zugeordnete Werte
-    if (data.not_matched && data.not_matched.length > 0) {
-      const box = document.getElementById('notMatchedBox');
-      box.style.display = '';
-      const list = document.getElementById('notMatchedList');
-      list.innerHTML = data.not_matched.map(
-        m => `<li><strong>${m.parameter}</strong>: ${m.wert} ${m.einheit || ''} → bitte manuell eintragen</li>`
-      ).join('');
-    }
+    file = request.files["file"]
+    customer_name = request.form.get("customer_name", "").strip()
 
-    result.classList.add('visible');
-  }
+    if not customer_name:
+        return jsonify({"error": "Bitte Kundennamen eingeben"}), 400
+    if not file or not allowed_file(file.filename):
+        return jsonify({"error": "Nur PDF, JPG und PNG erlaubt"}), 400
 
-  document.getElementById('btnAgain').addEventListener('click', () => {
-    result.classList.remove('visible');
-    form.reset(); clearFile();
-    form.style.display = '';
-    document.getElementById('notMatchedBox').style.display = 'none';
-    errorBox.classList.remove('visible');
-    setStep(1);
-  });
+    file_content = file.read()
+    if len(file_content) > MAX_FILE_SIZE:
+        return jsonify({"error": "Datei zu groß (max. 20 MB)"}), 400
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    errorBox.classList.remove('visible');
-    setStep(2);
-    form.style.display = 'none';
-    loading.classList.add('visible');
+    file_type = file.content_type or "application/octet-stream"
+    test_date = datetime.now().strftime("%d.%m.%Y")
 
-    try {
-      const res = await fetch('/analyze', { method: 'POST', body: new FormData(form) });
-      const data = await res.json();
+    try:
+        # 1. Blutbild analysieren
+        analysis = analyze_with_claude(file_content, file_type)
+        mapped_values = analysis.get("werte", {})
+        not_matched = analysis.get("nicht_zugeordnet", [])
+        recommendation = analysis.get("handlungsempfehlung", {})
 
-      loading.classList.remove('visible');
+        if not mapped_values:
+            return jsonify({"error": "Keine Blutwerte erkannt. Bitte prüfe die Qualität der Datei."}), 422
 
-      if (!res.ok) throw new Error(data.error || 'Unbekannter Fehler');
+        # 2. Google Sheets
+        creds = get_google_credentials()
+        gc = gspread.authorize(creds)
 
-      showResult(data);
-    } catch (err) {
-      loading.classList.remove('visible');
-      form.style.display = '';
-      setStep(1);
-      errorBox.textContent = err.message;
-      errorBox.classList.add('visible');
-    }
-  });
-</script>
-</body>
-</html>
+        sh, ws, is_new = find_or_create_customer_tab(gc, customer_name)
+
+        # 3. Parameter-Mapping aufbauen
+        param_row_map, all_values = build_param_row_map(ws)
+        header_row_idx, col_idx, be_name = find_be_column(all_values)
+
+        if col_idx is None:
+            return jsonify({"error": "BE-Spalten nicht gefunden. Bitte Template prüfen."}), 500
+
+        # 4. Werte eintragen
+        written = write_values_to_sheet(
+            ws, param_row_map, all_values, col_idx, header_row_idx, mapped_values, test_date
+        )
+
+        # 5. Handlungsempfehlung in Notiz-Bereich schreiben (letztes Sheet oder eigene Zeile)
+        # Suche nach freier Zeile am Ende des Sheets für die Empfehlung
+        try:
+            next_row = len(all_values) + 3
+            empfehlung_text = (
+                f"=== Handlungsempfehlung {test_date} ({be_name}) ===\n"
+                f"ZUSAMMENFASSUNG: {recommendation.get('zusammenfassung', '')}\n"
+                f"DRINGEND: {recommendation.get('dringend', '')}\n"
+                f"ERNÄHRUNG: {recommendation.get('ernaehrung', '')}\n"
+                f"TRAINING: {recommendation.get('training', '')}\n"
+                f"SUPPLEMENTS: {recommendation.get('supplements', '')}\n"
+                f"FOLLOW-UP: {recommendation.get('followup', '')}"
+            )
+            ws.update_cell(next_row, 1, empfehlung_text)
+        except Exception:
+            pass  # Empfehlung ist optional
+
+        sheet_url = f"https://docs.google.com/spreadsheets/d/{TEMPLATE_SHEET_ID}/edit#gid={ws.id}"
+
+        return jsonify({
+            "success": True,
+            "sheet_url": sheet_url,
+            "sheet_name": customer_name,
+            "be_column": be_name,
+            "is_new_customer": is_new,
+            "values_written": written,
+            "not_matched_count": len(not_matched),
+            "not_matched": not_matched,
+            "recommendation": recommendation,
+        })
+
+    except json.JSONDecodeError:
+        return jsonify({"error": "Claude konnte das Blutbild nicht auslesen. Bitte Dateiqualität prüfen."}), 422
+    except anthropic.APIError as e:
+        return jsonify({"error": f"API-Fehler: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Fehler: {str(e)}"}), 500
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
