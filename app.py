@@ -188,8 +188,27 @@ def write_values_to_sheet(worksheet, param_row_map, all_values, col_idx, header_
     return written
 
 
+def _extract_json(text):
+    text = text.strip()
+    if "```" in text:
+        for part in text.split("```"):
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            if part.startswith("{"):
+                text = part
+                break
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start != -1 and end > start:
+        text = text[start:end]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return json.loads(repair_json(text))
+
+
 def analyze_with_claude(file_content, file_type):
-    """Claude analysiert das Blutbild und ordnet Werte den Template-Parametern zu."""
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
     b64 = base64.standard_b64encode(file_content).decode("utf-8")
 
@@ -207,78 +226,68 @@ def analyze_with_claude(file_content, file_type):
 
     params_list = "\n".join("- " + p for p in TEMPLATE_PARAMETERS)
 
-    json_template = (
-        '{\n'
-        '  "werte": {\n'
-        '    "Parameter-Name aus der Liste": "Zahlenwert ohne Einheit"\n'
-        '  },\n'
-        '  "nicht_zugeordnet": [\n'
-        '    {"parameter": "Name", "wert": "Wert", "einheit": "Einheit"}\n'
-        '  ]\n'
-        '}'
-    )
-
-    prompt = (
-        "Du analysierst ein medizinisches Blutbild fuer einen Fitness-Coach.\n\n"
-        "SCHRITT 1: Gib alle Blutwerte als JSON aus.\n"
-        "Ordne JEDEN Wert dem passenden Parameter aus dieser Liste zu:\n\n"
-        "PARAMETER-LISTE (exakt diese Namen verwenden):\n"
+    # --- CALL 1: Blutwerte extrahieren ---
+    values_prompt = (
+        "Extract ALL blood values from this medical lab report and map each one to the closest parameter in the list below.\n\n"
+        "PARAMETER LIST (use EXACTLY these names as keys):\n"
         + params_list +
-        "\n\nMATCHING-REGELN:\n"
-        "- Ignoriere Einheiten und Klammern beim Matching\n"
-        "- Ordne zu wenn der Name aehnlich ist (Hb=Haemoglobin, eGFR=GFR, TSH=fT3 etc.)\n"
-        "- Nur wenn gar keine Zuordnung moeglich: nicht_zugeordnet\n\n"
-        "JSON-FORMAT (NUR Zahlen als Werte, keine Einheiten):\n"
-        + json_template +
-        "\n\n---EMPFEHLUNG---\n"
-        "SCHRITT 2: Schreibe nach dem JSON (getrennt durch ---EMPFEHLUNG---) "
-        "eine Handlungsempfehlung fuer den Coach mit diesen Abschnitten:\n"
-        "ZUSAMMENFASSUNG: ...\n"
-        "DRINGEND: ...\n"
-        "ZUSAMMENHAENGE: (min. 3-5 konkrete Wert-Zusammenhaenge erklaeren)\n"
-        "ERNAEHRUNG: ...\n"
-        "TRAINING: ...\n"
-        "SUPPLEMENTS: ...\n"
-        "FOLLOWUP: ..."
+        "\n\nMATCHING RULES - be aggressive in matching:\n"
+        "- HDL-Cholesterin -> HDL-C (mg/dL)\n"
+        "- LDL-Cholesterin -> LDL-C (mg/dL)\n"
+        "- Apolipoprotein B -> ApoB (mg/dL)\n"
+        "- Haemoglobin, Hb -> Haemoglobin / Hb (g/dl)\n"
+        "- eGFR, GFR -> GFR CKD-EPI (ml/min/1.73m2)\n"
+        "- Kreatinin -> Kreatinin (mg/dl)\n"
+        "- Harnstoff -> Harnstoff (mg/dl)\n"
+        "- Harnsaeure -> Harnsaeure (mg/dl)\n"
+        "- Folsaeure -> Vitamin B9\n"
+        "- Thiamin -> Vitamin B1\n"
+        "- Holotranscobalamin, aktives B12 -> Vitamin B12\n"
+        "- SHBG, Sexualhormon-bindendes Globulin -> SHBG\n"
+        "- TSH, TSH-basal -> fT3\n"
+        "- freies T4 -> fT3\n"
+        "- Ferritin -> Eisen\n"
+        "- Eisen (Serum) -> Eisen\n"
+        "- Ignore units and parentheses when matching\n"
+        "- Only put in 'nicht_zugeordnet' if truly no match exists\n\n"
+        "Respond ONLY with valid JSON (no explanation, no code fences):\n"
+        '{"werte": {"Exact Parameter Name": "numeric value only"}, '
+        '"nicht_zugeordnet": [{"parameter": "name", "wert": "value", "einheit": "unit"}]}'
     )
 
-    message = client.messages.create(
+    msg1 = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=4096,
-        messages=[{"role": "user", "content": [content_block, {"type": "text", "text": prompt}]}],
+        messages=[{"role": "user", "content": [content_block, {"type": "text", "text": values_prompt}]}],
+    )
+    data = _extract_json(msg1.content[0].text)
+
+    # --- CALL 2: Handlungsempfehlung generieren ---
+    werte_summary = "\n".join(
+        f"- {k}: {v}" for k, v in (data.get("werte") or {}).items()
+    )
+    rec_prompt = (
+        "Du bist Experte fuer Praezisionsmedizin und Fitness-Coaching.\n"
+        "Basierend auf diesen Blutwerten eines Kunden erstelle eine Handlungsempfehlung fuer den Coach:\n\n"
+        + werte_summary +
+        "\n\nStrukturiere deine Antwort EXAKT so (mit diesen Ueberschriften):\n\n"
+        "ZUSAMMENFASSUNG: [2-3 Saetze medizinische Einordnung]\n\n"
+        "DRINGEND: [Werte die sofortige Aufmerksamkeit brauchen, oder: Keine dringenden Auffaelligkeiten]\n\n"
+        "ZUSAMMENHAENGE: [Erklaere min. 3-5 konkrete Zusammenhaenge zwischen den Werten und was das fuer den Coach bedeutet]\n\n"
+        "ERNAEHRUNG: [Konkrete Ernaehrungsempfehlungen]\n\n"
+        "TRAINING: [Trainingsempfehlungen und eventuelle Einschraenkungen]\n\n"
+        "SUPPLEMENTS: [Empfohlene Supplements mit Begruendung]\n\n"
+        "FOLLOWUP: [Wann naechstes Blutbild und was zu beobachten ist]"
     )
 
-    full_text = message.content[0].text.strip()
+    msg2 = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
+        messages=[{"role": "user", "content": rec_prompt}],
+    )
+    rec_text = msg2.content[0].text.strip()
 
-    # Split JSON part from recommendations
-    if "---EMPFEHLUNG---" in full_text:
-        json_part, rec_part = full_text.split("---EMPFEHLUNG---", 1)
-    else:
-        json_part = full_text
-        rec_part = ""
-
-    # Extract JSON
-    json_part = json_part.strip()
-    if "```" in json_part:
-        for part in json_part.split("```"):
-            part = part.strip()
-            if part.startswith("json"):
-                part = part[4:].strip()
-            if part.startswith("{"):
-                json_part = part
-                break
-    start = json_part.find("{")
-    end = json_part.rfind("}") + 1
-    if start != -1 and end > start:
-        json_part = json_part[start:end]
-
-    try:
-        data = json.loads(json_part)
-    except json.JSONDecodeError:
-        repaired = repair_json(json_part)
-        data = json.loads(repaired)
-
-    # Parse text recommendations into structured dict
+    # Parse sections
     rec = {}
     section_map = {
         "ZUSAMMENFASSUNG": "zusammenfassung",
@@ -291,7 +300,7 @@ def analyze_with_claude(file_content, file_type):
     }
     current_key = None
     current_lines = []
-    for line in rec_part.strip().splitlines():
+    for line in rec_text.splitlines():
         line = line.strip()
         matched = False
         for label, key in section_map.items():
