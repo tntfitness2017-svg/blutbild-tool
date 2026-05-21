@@ -377,8 +377,8 @@ def analyze():
             "recommendation": recommendation,
         })
 
-    except json.JSONDecodeError:
-        return jsonify({"error": "Claude konnte das Blutbild nicht auslesen. Bitte Dateiqualität prüfen."}), 422
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"JSON parse error: {str(e)[:200]}"}), 422
     except anthropic.APIError as e:
         return jsonify({"error": f"API-Fehler: {str(e)}"}), 500
     except Exception as e:
