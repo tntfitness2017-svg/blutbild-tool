@@ -210,35 +210,36 @@ def analyze_with_claude(file_content, file_type):
     json_template = (
         '{\n'
         '  "werte": {\n'
-        '    "Exakter Parameter-Name aus der Liste": "Messwert als Zahl ohne Einheit"\n'
+        '    "Parameter-Name aus der Liste": "Zahlenwert ohne Einheit"\n'
         '  },\n'
         '  "nicht_zugeordnet": [\n'
         '    {"parameter": "Name", "wert": "Wert", "einheit": "Einheit"}\n'
-        '  ],\n'
-        '  "handlungsempfehlung": {\n'
-        '    "zusammenfassung": "Zusammenfassung in 2-3 Saetzen",\n'
-        '    "dringend": "Dringende Werte oder: Keine auffaelligen Werte",\n'
-        '    "zusammenhaenge": "Welche Werte haengen zusammen und was bedeutet das fuer den Coach? Min. 3-5 konkrete Zusammenhaenge benennen.",\n'
-        '    "ernaehrung": "Ernaehrungsempfehlungen",\n'
-        '    "training": "Trainingsempfehlungen",\n'
-        '    "supplements": "Supplement-Empfehlungen mit Begruendung",\n'
-        '    "followup": "Wann naechstes Blutbild"\n'
-        '  }\n'
+        '  ]\n'
         '}'
     )
 
     prompt = (
         "Du analysierst ein medizinisches Blutbild fuer einen Fitness-Coach.\n\n"
+        "SCHRITT 1: Gib alle Blutwerte als JSON aus.\n"
         "Ordne JEDEN Wert dem passenden Parameter aus dieser Liste zu:\n\n"
         "PARAMETER-LISTE (exakt diese Namen verwenden):\n"
         + params_list +
         "\n\nMATCHING-REGELN:\n"
         "- Ignoriere Einheiten und Klammern beim Matching\n"
-        "- Ordne auch zu wenn der Name leicht abweicht (z.B. Hb -> Haemoglobin)\n"
-        "- Nur wenn KEINE Zuordnung moeglich: 'nicht_zugeordnet'\n"
-        "- Ziel: moeglichst wenige Werte in nicht_zugeordnet\n\n"
-        "Antworte NUR mit gueltigem JSON:\n\n"
-        + json_template
+        "- Ordne zu wenn der Name aehnlich ist (Hb=Haemoglobin, eGFR=GFR, TSH=fT3 etc.)\n"
+        "- Nur wenn gar keine Zuordnung moeglich: nicht_zugeordnet\n\n"
+        "JSON-FORMAT (NUR Zahlen als Werte, keine Einheiten):\n"
+        + json_template +
+        "\n\n---EMPFEHLUNG---\n"
+        "SCHRITT 2: Schreibe nach dem JSON (getrennt durch ---EMPFEHLUNG---) "
+        "eine Handlungsempfehlung fuer den Coach mit diesen Abschnitten:\n"
+        "ZUSAMMENFASSUNG: ...\n"
+        "DRINGEND: ...\n"
+        "ZUSAMMENHAENGE: (min. 3-5 konkrete Wert-Zusammenhaenge erklaeren)\n"
+        "ERNAEHRUNG: ...\n"
+        "TRAINING: ...\n"
+        "SUPPLEMENTS: ...\n"
+        "FOLLOWUP: ..."
     )
 
     message = client.messages.create(
@@ -247,27 +248,67 @@ def analyze_with_claude(file_content, file_type):
         messages=[{"role": "user", "content": [content_block, {"type": "text", "text": prompt}]}],
     )
 
-    text = message.content[0].text.strip()
-    # Strip code fences
-    if "```" in text:
-        for part in text.split("```"):
+    full_text = message.content[0].text.strip()
+
+    # Split JSON part from recommendations
+    if "---EMPFEHLUNG---" in full_text:
+        json_part, rec_part = full_text.split("---EMPFEHLUNG---", 1)
+    else:
+        json_part = full_text
+        rec_part = ""
+
+    # Extract JSON
+    json_part = json_part.strip()
+    if "```" in json_part:
+        for part in json_part.split("```"):
             part = part.strip()
             if part.startswith("json"):
                 part = part[4:].strip()
             if part.startswith("{"):
-                text = part
+                json_part = part
                 break
-    # Find JSON boundaries
-    start = text.find("{")
-    end = text.rfind("}") + 1
+    start = json_part.find("{")
+    end = json_part.rfind("}") + 1
     if start != -1 and end > start:
-        text = text[start:end]
-    # Try direct parse, then repair
+        json_part = json_part[start:end]
+
     try:
-        return json.loads(text)
+        data = json.loads(json_part)
     except json.JSONDecodeError:
-        repaired = repair_json(text)
-        return json.loads(repaired)
+        repaired = repair_json(json_part)
+        data = json.loads(repaired)
+
+    # Parse text recommendations into structured dict
+    rec = {}
+    section_map = {
+        "ZUSAMMENFASSUNG": "zusammenfassung",
+        "DRINGEND": "dringend",
+        "ZUSAMMENHAENGE": "zusammenhaenge",
+        "ERNAEHRUNG": "ernaehrung",
+        "TRAINING": "training",
+        "SUPPLEMENTS": "supplements",
+        "FOLLOWUP": "followup",
+    }
+    current_key = None
+    current_lines = []
+    for line in rec_part.strip().splitlines():
+        line = line.strip()
+        matched = False
+        for label, key in section_map.items():
+            if line.upper().startswith(label + ":"):
+                if current_key:
+                    rec[current_key] = " ".join(current_lines).strip()
+                current_key = key
+                current_lines = [line[len(label)+1:].strip()]
+                matched = True
+                break
+        if not matched and current_key and line:
+            current_lines.append(line)
+    if current_key:
+        rec[current_key] = " ".join(current_lines).strip()
+
+    data["handlungsempfehlung"] = rec
+    return data
 
 
 @app.route("/")
