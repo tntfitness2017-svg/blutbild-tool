@@ -73,10 +73,23 @@ TEMPLATE_PARAMETERS = [
     "Cholesterin (mg/dl)", "ApoB (mg/dL)", "Apo A1", "LDL-C (mg/dL)",
     "Non-HDL-Cholesterin (mg/dL)", "Triglyceride (mg/dL)", "HDL-C (mg/dL)",
     "Homocystein (μmol/L)", "Lipoprotein(a) / Lp(a) (nmol/l)",
-    # Blutbild
+    # Blutbild - komplett
     "Erythrozyten (Mio/μl)", "Hämatokrit (%)", "Hämoglobin / Hb (g/dl)",
     "MCH (pg)", "MCHC (g/dl)", "MCV (fl)", "RDW-CV (%)", "RDW-SD (fl)",
+    "Thrombozyten (G/l)",
     "Leukozyten (G/l)", "Lymphozyten (G/l)", "Neutrophile (G/l)",
+    "Monozyten (G/l)", "Monozyten, relativ (%)",
+    "Eosinophile (G/l)", "Eosinophile, relativ (%)",
+    "Basophile (G/l)", "Basophile, relativ (%)",
+    # Elektrolyte
+    "Natrium (mmol/l)", "Kalium (mmol/l)", "Chlorid (mmol/l)",
+    "Phosphat (mmol/l)",
+    # Pankreas
+    "Amylase (U/l)", "Lipase (U/l)",
+    # Schilddrüse
+    "TSH (mU/l)", "Freies T4 / fT4 (ng/dl)", "Freies T3 / fT3 (pg/ml)",
+    # Gerinnung
+    "Quick-Wert (%)", "INR", "PTT (s)",
     # Hormone
     "Gesamt-Testosteron (ng/ml)", "Testosteron, frei (pg/ml)",
     "SHBG (nmol/l)", "Estradiol / E2 (pg/ml)",
@@ -84,9 +97,12 @@ TEMPLATE_PARAMETERS = [
     "GOT / AST (U/l)", "GPT / ALT (U/l)", "Gamma GT (U/l)",
     "Alkalische Phosphatase / AP (U/l)", "Bilirubin gesamt (mg/dl)",
     "Albumin (g/dl)", "Protein / Gesamtprotein (g/dl)",
+    # Herzmarker & Entzündung
+    "LDH (U/l)", "CK / Kreatinkinase (U/l)",
+    "Gesamtcholesterin (mg/dl)",
     # Zusaetzliche haeufige Parameter
     "Ferritin (ng/ml)", "Transferrin (mg/dl)", "Transferrinsaettigung (%)",
-    "Magnesium (mmol/l)", "TSH (mU/l)", "Freies T4 (ng/dl)",
+    "Magnesium (mmol/l)",
     "Coenzym Q10 (ug/ml)", "Malondialdehyd (umol/l)",
     "Pyridoxalphosphat / Vitamin B6 (ug/l)",
     "Holotranscobalamin / aktives B12 (pmol/l)",
@@ -266,12 +282,31 @@ def analyze_with_claude(file_content, file_type):
         "- Magnesium -> Magnesium (mmol/l)\n"
         "- Coenzym Q10 -> Coenzym Q10 (ug/ml)\n"
         "- Malondialdehyd, MDA -> Malondialdehyd (umol/l)\n"
-        "- GOT, AST, GOT/AST -> GOT / AST (U/l)\n"
-        "- GPT, ALT, GPT/ALT -> GPT / ALT (U/l)\n"
-        "- Gamma GT, GGT, Gamma-GT -> Gamma GT (U/l)\n"
-        "- AP, Alkalische Phosphatase -> Alkalische Phosphatase / AP (U/l)\n"
-        "- Bilirubin -> Bilirubin gesamt (mg/dl)\n"
+        "- GOT, AST, GOT/AST, ASAT -> GOT / AST (U/l)\n"
+        "- GPT, ALT, GPT/ALT, ALAT -> GPT / ALT (U/l)\n"
+        "- Gamma GT, GGT, Gamma-GT, yGT -> Gamma GT (U/l)\n"
+        "- AP, Alkalische Phosphatase, Alk. Phosphatase -> Alkalische Phosphatase / AP (U/l)\n"
+        "- Bilirubin, Bilirubin gesamt -> Bilirubin gesamt (mg/dl)\n"
         "- Albumin -> Albumin (g/dl)\n"
+        "- Natrium, Na -> Natrium (mmol/l)\n"
+        "- Kalium, K -> Kalium (mmol/l)\n"
+        "- Chlorid, Cl -> Chlorid (mmol/l)\n"
+        "- Phosphat, Phosphor -> Phosphat (mmol/l)\n"
+        "- Amylase -> Amylase (U/l)\n"
+        "- Lipase -> Lipase (U/l)\n"
+        "- Thrombozyten, PLT, Blutplaettchen -> Thrombozyten (G/l)\n"
+        "- Monozyten -> Monozyten (G/l)\n"
+        "- Eosinophile, Eos -> Eosinophile (G/l)\n"
+        "- Basophile, Baso -> Basophile (G/l)\n"
+        "- Neutrophile, Neutr, Granulozyten -> Neutrophile (G/l)\n"
+        "- Lymphozyten, Lympho -> Lymphozyten (G/l)\n"
+        "- TSH, TSH-basal, TSH-Wert -> TSH (mU/l)\n"
+        "- freies T3, fT3 -> Freies T3 / fT3 (pg/ml)\n"
+        "- freies T4, fT4 -> Freies T4 / fT4 (ng/dl)\n"
+        "- LDH, Laktatdehydrogenase -> LDH (U/l)\n"
+        "- CK, Kreatinkinase, Creatinkinase -> CK / Kreatinkinase (U/l)\n"
+        "- Cholesterin, Gesamtcholesterin -> Gesamtcholesterin (mg/dl)\n"
+        "- Quick, Quick-Wert, Prothrombinzeit -> Quick-Wert (%)\n"
         "- Eisen (Serum), Eisen -> Eisen\n"
         "- Ignore units and parentheses when matching\n"
         "- Only put in 'nicht_zugeordnet' if truly no match exists\n\n"
